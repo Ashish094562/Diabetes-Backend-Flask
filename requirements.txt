@@ -6,3 +6,5 @@ joblib
 scikit-learn==1.5.1
 imbalanced-learn
 xgboost
+pymongo
+python-dotenv

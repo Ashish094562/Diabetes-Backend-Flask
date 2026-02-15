@@ -1,44 +1,40 @@
 from flask import Flask, request, jsonify
 from flask_cors import CORS
-from database import db
-from models import PatientRecord
+from pymongo import MongoClient
+from bson import ObjectId
 import joblib
 import pandas as pd
 import os
+from dotenv import load_dotenv
+
+
+load_dotenv()
 
 app = Flask(__name__)
 CORS(app)
 
+MONGO_URI = os.environ.get("MONGO_URI")
+client = MongoClient(MONGO_URI)
 
-app.config['SQLALCHEMY_DATABASE_URI'] = 'sqlite:///diabetes.db'
-app.config['SQLALCHEMY_TRACK_MODIFICATIONS'] = False
+db = client["diabetes_db"]
+collection = db["patients"]
 
-db.init_app(app)
 
-# Load ML model
 model = joblib.load("diabetes_model.pkl")
 
-# Create DB tables
-with app.app_context():
-    db.create_all()
 
-# -------------------------------
-# Health Check
-# -------------------------------
 @app.route('/health', methods=['GET'])
 def health():
     return jsonify({"status": "ok"})
 
 
-# -------------------------------
-# Predict + Save (Spring Equivalent)
-# -------------------------------
+
 @app.route('/api/predict', methods=['POST'])
 def predict():
     try:
         data = request.get_json()
 
-        # Convert 0/1 → yes/no for model
+        
         hypertension_str = "yes" if str(data.get("hypertension")) == "1" else "no"
         heart_disease_str = "yes" if str(data.get("heart_disease")) == "1" else "no"
 
@@ -58,39 +54,71 @@ def predict():
         pred = int(model.predict(df)[0])
         result = "Diabetic" if pred == 1 else "NotDiabetic"
 
-        # Save in DB (convert back to 0/1)
-        record = PatientRecord(
-            gender=input_data['gender'],
-            age=input_data['age'],
-            hypertension=1 if hypertension_str == "yes" else 0,
-            heart_disease=1 if heart_disease_str == "yes" else 0,
-            smoking_history=input_data['smoking_history'],
-            bmi=input_data['bmi'],
-            hba1c_level=input_data['HbA1c_level'],
-            blood_glucose_level=input_data['blood_glucose_level'],
-            result=result
-        )
+       
+        record = {
+            "gender": input_data['gender'],
+            "age": input_data['age'],
+            "hypertension": 1 if hypertension_str == "yes" else 0,
+            "heart_disease": 1 if heart_disease_str == "yes" else 0,
+            "smoking_history": input_data['smoking_history'],
+            "bmi": input_data['bmi'],
+            "hba1c_level": input_data['HbA1c_level'],
+            "blood_glucose_level": input_data['blood_glucose_level'],
+            "result": result
+        }
 
-        db.session.add(record)
-        db.session.commit()
+        inserted = collection.insert_one(record)
 
         return jsonify({
             "message": "Prediction saved successfully",
             "result": result,
-            "recordId": record.id
+            "recordId": str(inserted.inserted_id)
         })
 
     except Exception as e:
         return jsonify({"error": str(e)}), 400
 
 
-# -------------------------------
-# Get All Records
-# -------------------------------
+
 @app.route('/api/records', methods=['GET'])
 def get_all_records():
-    records = PatientRecord.query.all()
-    return jsonify([r.to_dict() for r in records])
+    records = []
+    for doc in collection.find():
+        doc['_id'] = str(doc['_id'])
+        records.append(doc)
+
+    return jsonify(records)
+
+
+@app.route('/api/records/<id>', methods=['GET'])
+def get_record(id):
+    try:
+        record = collection.find_one({"_id": ObjectId(id)})
+
+        if not record:
+            return jsonify({"error": "Record not found"}), 404
+
+        record['_id'] = str(record['_id'])
+        return jsonify(record)
+
+    except:
+        return jsonify({"error": "Invalid ID"}), 400
+
+
+
+@app.route('/api/records/<id>', methods=['DELETE'])
+def delete_record(id):
+    try:
+        result = collection.delete_one({"_id": ObjectId(id)})
+
+        if result.deleted_count == 0:
+            return jsonify({"error": "Record not found"}), 404
+
+        return jsonify({"message": "Record deleted successfully"})
+
+    except:
+        return jsonify({"error": "Invalid ID"}), 400
+
 
 
 if __name__ == "__main__":
