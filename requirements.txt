@@ -9,3 +9,4 @@ xgboost
 pymongo
 python-dotenv
 certifi
+gunicorn
